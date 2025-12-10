@@ -11,36 +11,47 @@ provider "aws" {
   region = var.region
 }
 
+# -----------------------------
+# S3 Static Website Bucket
+# -----------------------------
 resource "aws_s3_bucket" "site" {
   bucket = var.bucket_name
-  acl    = "public-read"
-
-  website {
-    index_document = "index.html"
-    error_document = "index.html"
-  }
-
   force_destroy = true
 }
 
-data "aws_iam_policy_document" "site_policy" {
-  statement {
-    actions = ["s3:GetObject"]
+# Website configuration (separate block because "website" is deprecated)
+resource "aws_s3_bucket_website_configuration" "site" {
+  bucket = aws_s3_bucket.site.id
 
-    principals {
-      type        = "AWS"
-      identifiers = ["*"]
-    }
+  index_document {
+    suffix = "index.html"
+  }
 
-    resources = ["${aws_s3_bucket.site.arn}/*"]
+  error_document {
+    key = "index.html"
   }
 }
 
+# Make bucket objects public
 resource "aws_s3_bucket_policy" "site_policy" {
   bucket = aws_s3_bucket.site.id
-  policy = data.aws_iam_policy_document.site_policy.json
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = "*"
+        Action   = ["s3:GetObject"]
+        Resource = "${aws_s3_bucket.site.arn}/*"
+      }
+    ]
+  })
 }
 
+# -----------------------------
+# CloudFront CDN
+# -----------------------------
 resource "aws_cloudfront_distribution" "cdn" {
   enabled = true
 
@@ -50,13 +61,18 @@ resource "aws_cloudfront_distribution" "cdn" {
   }
 
   default_cache_behavior {
-    allowed_methods  = ["GET", "HEAD"]
-    cached_methods   = ["GET", "HEAD"]
     target_origin_id = "S3-${aws_s3_bucket.site.id}"
     viewer_protocol_policy = "redirect-to-https"
 
+    allowed_methods  = ["GET", "HEAD"]
+    cached_methods   = ["GET", "HEAD"]
+
     forwarded_values {
       query_string = false
+
+      cookies {
+        forward = "none"
+      }
     }
   }
 
@@ -70,5 +86,7 @@ resource "aws_cloudfront_distribution" "cdn" {
     cloudfront_default_certificate = true
   }
 
-  depends_on = [aws_s3_bucket_policy.site_policy]
+  depends_on = [
+    aws_s3_bucket_policy.site_policy
+  ]
 }
